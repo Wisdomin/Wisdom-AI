@@ -330,7 +330,8 @@ class WisdomAI {
             };
 
             try {
-                const { data, error } = await supabase
+                // Access window.supabase to ensure it's defined
+                const { data, error } = await window.supabase
                     .from('skill_workers')
                     .insert([newWorker])
                     .select(); // Add .select() to get the inserted data back, including the generated ID
@@ -359,22 +360,45 @@ class WisdomAI {
     transitionToFinderOnboarding(userId) {
         this.clearUI();
         this.displayMessage(`Wonderful! To help me find the perfect talent for your needs, please provide a few details about what you're looking for.`);
-        this._getUserBasicInfo(() => this._getFinderSkillsNeeded(() => this._getUserLocationDetails(() => {
+        this._getUserBasicInfo(() => this._getFinderSkillsNeeded(() => this._getUserLocationDetails(async () => { // <--- ADD 'async' HERE for consistency
             this.displayMessage(`Alright! I have everything I need to start my search for you. I'm already thinking about the best connections!`);
             // TODO: Update this block to use Supabase insertion for skill_finders table
-            this.knowledgeBase.skill_finders[userId] = {
-                "name": this.tempUserData.name,
-                "contact_email": this.tempUserData.email,
-                "phone_number": this.tempUserData.phone,
-                "skill_needed": this.tempUserData.skillsNeededList,
-                "project_description": this.tempUserData.projectDescription || "",
-                "location": this.tempUserData.locationCoordinates,
-                "full_address": this.tempUserData.fullAddressString,
-                "country": this.tempUserData.country
+            // This section will be updated to use Supabase just like skill_workers
+            const { name, email, phone, skillsNeededList, projectDescription, locationCoordinates, fullAddressString, country } = this.tempUserData;
+
+            const newFinder = {
+                name: name,
+                email: email,
+                phone_number: phone || null,
+                skill_needed: skillsNeededList,
+                project_description: projectDescription || null,
+                location_lat: locationCoordinates ? locationCoordinates.lat : null,
+                location_lon: locationCoordinates ? locationCoordinates.lon : null,
+                country: country || null,
+                address_text: fullAddressString || null
             };
+
+            try {
+                const { data, error } = await window.supabase
+                    .from('skill_finders')
+                    .insert([newFinder])
+                    .select();
+
+                if (error) {
+                    console.error('Supabase insertion error for skill_finders:', error);
+                    this.displayMessage("I apologize, but there was an error registering your finder profile. Please try again or contact support.");
+                } else {
+                    console.log('Skill Finder registered successfully:', data);
+                    this.displayMessage("Thank you so much! Your finder profile has been registered. I'm ready to start searching for you.");
+                    this.updateUserSession({ type: 'finder', profileId: data[0].id });
+                }
+            } catch (e) {
+                console.error('Unexpected error during Supabase operation for skill_finders:', e);
+                this.displayMessage("An unexpected error occurred during finder registration. Please check your console for details.");
+            }
+
             this._updateUserCurrentLocation(userId, this.tempUserData.locationCoordinates);
             this._toggleLocationSharing(userId, true);
-            console.log(`[${this.name}]: Skill Finder profile created and learned: ${this.knowledgeBase.skill_finders[userId].name}`);
             this.transitionToMainDashboard(userId, "finder");
         })));
     }
@@ -594,8 +618,42 @@ class WisdomAI {
             }
 
             // TODO: Replace this._findAllWorkersBySkillInState with Supabase query
-            const finderCountry = this.knowledgeBase.skill_finders[finderId].country || "Nigeria"; // This line will need adjustment too
-            const allWorkersInState = this._findAllWorkersBySkillInState(skillSought, finderCountry); 
+            // Finder country should be fetched from Supabase, not local knowledgeBase
+            let finderCountry;
+            try {
+                const { data, error } = await window.supabase
+                    .from('skill_finders')
+                    .select('country')
+                    .eq('id', this.activeUserSessions[finderId].profileId) // Assuming profileId is stored
+                    .single();
+                if (error) {
+                    console.error('Error fetching finder country:', error);
+                    finderCountry = "Nigeria"; // Fallback
+                } else {
+                    finderCountry = data.country || "Nigeria";
+                }
+            } catch (e) {
+                console.error('Unexpected error fetching finder country:', e);
+                finderCountry = "Nigeria"; // Fallback
+            }
+
+            // Now, query Supabase for skill workers
+            let allWorkersInState = [];
+            try {
+                const { data, error } = await window.supabase
+                    .from('skill_workers')
+                    .select('*')
+                    .eq('country', finderCountry)
+                    .contains('skills', [skillSought]); // Check if the skill_needed array contains the skill
+                
+                if (error) {
+                    console.error('Error fetching workers from Supabase:', error);
+                } else {
+                    allWorkersInState = data.map(worker => ({ id: worker.id, details: worker }));
+                }
+            } catch (e) {
+                console.error('Unexpected error during Supabase worker query:', e);
+            }
             
             if (allWorkersInState.length === 0) {
                 this.displayMessage(`Hmm, I couldn't find any ${skillSought} workers registered in your area right now.`);
@@ -636,7 +694,8 @@ class WisdomAI {
         this.clearUI();
         this.displayMessage(`Prioritizing closest matches for '${finderId}'...`);
         // Note: finderLocation also comes from tempUserData, which isn't persistent yet
-        const finderLocation = this._getUserCurrentLocationData(finderId); 
+        const finderSession = this.getUserSession(finderId);
+        const finderLocation = finderSession ? finderSession.current_location : null;
         
         if (!finderLocation) {
             this.displayMessage(`I can't find closest matches without your current location enabled. Let's try displaying all matches, or you can enable location sharing.`);
@@ -652,8 +711,8 @@ class WisdomAI {
         
         const sortableWorkers = [];
         for (const worker of allWorkers) {
-            const workerLocation = worker.details.location; // This is an array [lat, lon] from old model
-            const workerLocationObj = { lat: workerLocation[0], lon: workerLocation[1] }; // Convert to object
+            // Worker location comes from Supabase, stored as lat/lon directly, not an array
+            const workerLocationObj = { lat: worker.details.location_lat, lon: worker.details.location_lon }; 
             const distance = calculateDistance(finderLocation, workerLocationObj);
             if (distance !== Infinity) {
                 sortableWorkers.push([distance, worker.id, worker.details]);
@@ -674,15 +733,41 @@ class WisdomAI {
 
     _displayWorkerMatches(finderId, workers, skillSought) {
         let currentIndex = 0;
-        const displayNextWorker = () => {
+        const displayNextWorker = async () => { // Make this async to fetch worker details if needed
             this.clearUI();
             if (currentIndex < workers.length) {
                 const worker = workers[currentIndex];
-                const workerDetails = worker.details;
+                let workerDetails = worker.details; // Already have details if from initial query
+
+                // If for some reason details are not fully loaded (e.g., in a future scenario where we just pass IDs)
+                if (!workerDetails || !workerDetails.name) {
+                     try {
+                        const { data, error } = await window.supabase
+                            .from('skill_workers')
+                            .select('*')
+                            .eq('id', worker.id)
+                            .single();
+                        if (error) {
+                            console.error('Error fetching worker details:', error);
+                            this.displayMessage(`Could not retrieve details for a worker. Skipping.`);
+                            currentIndex++;
+                            displayNextWorker();
+                            return;
+                        }
+                        workerDetails = data;
+                    } catch (e) {
+                        console.error('Unexpected error fetching worker details:', e);
+                        this.displayMessage(`An unexpected error occurred while fetching worker details. Skipping.`);
+                        currentIndex++;
+                        displayNextWorker();
+                        return;
+                    }
+                }
+
                 this.displayMessage(`Found a ${skillSought} worker:`);
                 this.displayMessage(`Name: ${workerDetails.name}`, true);
-                this.displayMessage(`Skills: ${workerDetails.skills.join(', ')}`, true);
-                this.displayMessage(`Location: ${workerDetails.full_address || 'Not provided'}`, true);
+                this.displayMessage(`Skills: ${workerDetails.skills ? workerDetails.skills.join(', ') : 'N/A'}`, true);
+                this.displayMessage(`Location: ${workerDetails.address_text || 'Not provided'}`, true);
                 this.displayMessage(`Rating: ${workerDetails.rating || 'N/A'}`, true);
 
                 this.createButton('Contact Worker', '', () => this.initiateContactProtocol(finderId, worker.id));
@@ -699,10 +784,26 @@ class WisdomAI {
         displayNextWorker();
     }
 
-    initiateContactProtocol(finderId, workerId) {
+    async initiateContactProtocol(finderId, workerId) {
         this.clearUI();
-        this.displayMessage(`Great choice! To connect you with ${this.knowledgeBase.skill_workers[workerId].name}, a small contact fee applies.`);
-        const feeConfig = this.contactFeeConfig[this.activeUserSessions[finderId].country || "Default_International"];
+        // Fetch worker name from Supabase for display
+        let workerName = "the worker";
+        try {
+            const { data, error } = await window.supabase
+                .from('skill_workers')
+                .select('name')
+                .eq('id', workerId)
+                .single();
+            if (!error && data) {
+                workerName = data.name;
+            }
+        } catch (e) {
+            console.error("Error fetching worker name:", e);
+        }
+
+        this.displayMessage(`Great choice! To connect you with ${workerName}, a small contact fee applies.`);
+        const finderSession = this.getUserSession(finderId);
+        const feeConfig = this.contactFeeConfig[finderSession.country || "Default_International"];
         const feeAmount = feeConfig.amount;
         const feeCurrency = feeConfig.currency;
         const paymentMethod = feeConfig.payment_method;
@@ -714,27 +815,63 @@ class WisdomAI {
         this.createButton('Cancel', 'cancel', () => this.displayMessage(`Contact request cancelled.`));
     }
 
-    confirmPayment(finderId, workerId, amount, currency) {
+    async confirmPayment(finderId, workerId, amount, currency) {
         this.displayMessage(`Confirming payment for ${amount} ${currency}...`);
+        
         // Simulate payment success
-        setTimeout(() => {
-            this.displayMessage(`Payment confirmed! Here are ${this.knowledgeBase.skill_workers[workerId].name}'s contact details:`);
-            this.displayMessage(`Email: ${this.knowledgeBase.skill_workers[workerId].contact_email}`, true);
-            this.displayMessage(`Phone: ${this.knowledgeBase.skill_workers[workerId].phone_number || 'N/A'}`, true);
+        setTimeout(async () => { // Make this callback async
+            // Fetch worker contact details from Supabase after payment
+            let workerEmail = 'N/A';
+            let workerPhone = 'N/A';
+            let workerName = "the worker";
+
+            try {
+                const { data, error } = await window.supabase
+                    .from('skill_workers')
+                    .select('name, email, phone_number')
+                    .eq('id', workerId)
+                    .single();
+                if (!error && data) {
+                    workerName = data.name;
+                    workerEmail = data.email;
+                    workerPhone = data.phone_number || 'N/A';
+                } else {
+                    console.error('Error fetching worker contact details:', error);
+                }
+            } catch (e) {
+                console.error('Unexpected error fetching worker contact details:', e);
+            }
+
+            this.displayMessage(`Payment confirmed! Here are ${workerName}'s contact details:`);
+            this.displayMessage(`Email: ${workerEmail}`, true);
+            this.displayMessage(`Phone: ${workerPhone}`, true);
             this.recordConnection(finderId, workerId, amount, currency);
             this.createButton('Back to Dashboard', '', () => this.transitionToMainDashboard(finderId, 'finder'));
         }, 2000); // Simulate network delay
     }
 
-    recordConnection(finderId, workerId, fee, currency) {
+    async recordConnection(finderId, workerId, fee, currency) {
         const connectionId = `conn_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-        this.connectionRecords[connectionId] = {
-            finderId: finderId,
-            workerId: workerId,
+        const newConnection = {
+            finder_id: finderId, // Use the actual ID from the session if available
+            worker_id: workerId,
             timestamp: new Date().toISOString(),
-            feePaid: fee,
+            fee_paid: fee,
             currency: currency
         };
+
+        try {
+            const { data, error } = await window.supabase
+                .from('connections') // Assuming you have a 'connections' table
+                .insert([newConnection]);
+            if (error) {
+                console.error('Supabase connection record error:', error);
+            } else {
+                console.log('Connection recorded successfully:', data);
+            }
+        } catch (e) {
+            console.error('Unexpected error recording connection:', e);
+        }
         console.log(`[${this.name}]: Connection recorded: ${connectionId}`);
     }
 
@@ -743,54 +880,137 @@ class WisdomAI {
         this.clearUI();
         this.displayMessage(`How was your experience with the skill worker? Please provide a rating (1-5 stars).`);
         const ratingInput = this.createInput('Rating (1-5):', 'number', 'user-rating', 'e.g., 4');
-        this.createButton('Submit Rating', '', () => {
+        this.createButton('Submit Rating', '', async () => { // Make this async
             const rating = parseInt(ratingInput.value);
             if (rating >= 1 && rating <= 5) {
-                this.submitRating(connectionId, rating);
+                await this.submitRating(connectionId, rating); // await the submitRating
             } else {
                 this.displayMessage(`Please enter a valid rating between 1 and 5.`);
             }
         });
     }
 
-    submitRating(connectionId, rating) {
-        const record = this.connectionRecords[connectionId];
-        if (record) {
-            record.rating = rating;
-            if (!this.userRatings[record.workerId]) {
-                this.userRatings[record.workerId] = [];
+    async submitRating(connectionId, rating) {
+        // Fetch connection record from Supabase
+        let connectionRecord;
+        try {
+            const { data, error } = await window.supabase
+                .from('connections')
+                .select('*')
+                .eq('id', connectionId) // Assuming connections table has an ID
+                .single();
+            if (error) {
+                console.error('Error fetching connection record:', error);
+                this.displayMessage(`Could not find connection record for rating.`);
+                return;
             }
-            this.userRatings[record.workerId].push(rating);
-            this.calculateAverageRating(record.workerId);
-            this.displayMessage(`Thank you for your rating!`);
-            this.checkSafetyProtocol(record.workerId, rating);
+            connectionRecord = data;
+        } catch (e) {
+            console.error('Unexpected error fetching connection record:', e);
+            this.displayMessage(`An unexpected error occurred.`);
+            return;
+        }
+
+        if (connectionRecord) {
+            // Update the connection record with the rating
+            try {
+                const { error: updateError } = await window.supabase
+                    .from('connections')
+                    .update({ rating: rating })
+                    .eq('id', connectionId);
+                
+                if (updateError) {
+                    console.error('Error updating connection rating:', updateError);
+                } else {
+                    this.displayMessage(`Thank you for your rating!`);
+                    // Now, update the worker's average rating in the skill_workers table
+                    await this.calculateAverageRating(connectionRecord.worker_id);
+                    this.checkSafetyProtocol(connectionRecord.worker_id, rating);
+                }
+            } catch (e) {
+                console.error('Unexpected error updating connection rating:', e);
+            }
         } else {
             this.displayMessage(`Could not find connection record for rating.`);
         }
     }
 
-    calculateAverageRating(workerId) {
-        const ratings = this.userRatings[workerId];
-        if (ratings && ratings.length > 0) {
-            const sum = ratings.reduce((acc, r) => acc + r, 0);
-            const avg = sum / ratings.length;
-            this.knowledgeBase.skill_workers[workerId].rating = avg.toFixed(1);
-            console.log(`[${this.name}]: ${workerId} average rating updated to ${avg.toFixed(1)}`);
+    async calculateAverageRating(workerId) {
+        try {
+            // Get all ratings for this worker from the 'connections' table
+            const { data: connectionRatings, error } = await window.supabase
+                .from('connections')
+                .select('rating')
+                .eq('worker_id', workerId)
+                .not('rating', 'is', null); // Only consider connections that have been rated
+
+            if (error) {
+                console.error('Error fetching worker ratings:', error);
+                return;
+            }
+
+            if (connectionRatings && connectionRatings.length > 0) {
+                const ratings = connectionRatings.map(c => c.rating);
+                const sum = ratings.reduce((acc, r) => acc + r, 0);
+                const avg = sum / ratings.length;
+                const newAvgRating = parseFloat(avg.toFixed(1));
+
+                // Update the worker's average rating in the 'skill_workers' table
+                const { error: updateError } = await window.supabase
+                    .from('skill_workers')
+                    .update({ rating: newAvgRating })
+                    .eq('id', workerId);
+                
+                if (updateError) {
+                    console.error('Error updating worker average rating:', updateError);
+                } else {
+                    console.log(`[${this.name}]: Worker ${workerId} average rating updated to ${newAvgRating}`);
+                }
+            } else {
+                console.log(`[${this.name}]: No ratings found for worker ${workerId}.`);
+            }
+        } catch (e) {
+            console.error('Unexpected error calculating average rating:', e);
         }
     }
 
     checkSafetyProtocol(workerId, latestRating) {
         if (latestRating <= this.safetyProtocols.low_rating_threshold) {
-            this.displayMessage(`A low rating for ${this.knowledgeBase.skill_workers[workerId].name} has been noted. Wisdom is initiating a safety review.`);
-            this.initiatePoliceCheck(workerId);
+            // Fetch worker name for message
+            let workerName = "the worker";
+            // This fetch can be awaited if critical, or done in background
+            window.supabase.from('skill_workers').select('name').eq('id', workerId).single()
+                .then(({ data, error }) => {
+                    if (!error && data) workerName = data.name;
+                    this.displayMessage(`A low rating for ${workerName} has been noted. Wisdom is initiating a safety review.`);
+                    this.initiatePoliceCheck(workerId);
+                })
+                .catch(e => {
+                    console.error("Error fetching worker name for safety check:", e);
+                    this.displayMessage(`A low rating for a worker has been noted. Wisdom is initiating a safety review.`);
+                    this.initiatePoliceCheck(workerId);
+                });
         }
     }
 
     initiatePoliceCheck(workerId) {
-        const workerCountry = this.knowledgeBase.skill_workers[workerId].country || "Nigeria";
-        const policeNumber = this.safetyProtocols.policeContactNumbers[workerCountry]?.Police || this.safetyProtocols.policeContactNumbers["Nigeria"].Police;
-        this.displayMessage(`(Conceptual: Contacting local authorities for ${workerId}'s region: ${policeNumber})`);
-        this.displayMessage(`If you have immediate concerns, please contact local police at ${policeNumber}.`, true);
+        // Fetch worker country from Supabase
+        let workerCountry = "Nigeria"; // Default fallback
+        window.supabase.from('skill_workers').select('country').eq('id', workerId).single()
+            .then(({ data, error }) => {
+                if (!error && data && data.country) {
+                    workerCountry = data.country;
+                }
+                const policeNumber = this.safetyProtocols.policeContactNumbers[workerCountry]?.Police || this.safetyProtocols.policeContactNumbers["Nigeria"].Police;
+                this.displayMessage(`(Conceptual: Contacting local authorities for ${workerId}'s region: ${policeNumber})`);
+                this.displayMessage(`If you have immediate concerns, please contact local police at ${policeNumber}.`, true);
+            })
+            .catch(e => {
+                console.error("Error fetching worker country for police check:", e);
+                const policeNumber = this.safetyProtocols.policeContactNumbers["Nigeria"].Police; // Fallback
+                this.displayMessage(`(Conceptual: Contacting local authorities for a worker's region: ${policeNumber})`);
+                this.displayMessage(`If you have immediate concerns, please contact local police at ${policeNumber}.`, true);
+            });
     }
 
     // --- Proactive Recommendations for Workers ---
@@ -801,7 +1021,7 @@ class WisdomAI {
         // Get the worker's skills from Supabase
         let workerSkills = [];
         try {
-            const { data, error } = await supabase
+            const { data, error } = await window.supabase
                 .from('skill_workers')
                 .select('skills')
                 .eq('id', workerId) // Query by ID to get specific worker's skills
@@ -830,11 +1050,11 @@ class WisdomAI {
             return;
         }
 
-        this.displayMessage(`Based on your skills (${workerSkills.join(', ')}), here are some potential job opportunities I've found (conceptual):`);
+        this.displayMessage(`Based on your skills (${workerSkills.join(', ')}), here are some potential job opportunities I've found:`);
 
         // Simulate fetching job requests from Supabase (from skill_finders table)
         try {
-            const { data: jobRequests, error: jobError } = await supabase
+            const { data: jobRequests, error: jobError } = await window.supabase
                 .from('skill_finders')
                 .select('*')
                 .overlaps('skill_needed', workerSkills); // Matches jobs where skill_needed array overlaps with workerSkills
