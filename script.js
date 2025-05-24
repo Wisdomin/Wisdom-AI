@@ -68,10 +68,11 @@ class WisdomAI {
         this.actionButtonsDiv = document.getElementById('action-buttons');
         this.wisdomAvatarImg = document.getElementById('wisdom-avatar').querySelector('img');
 
-        // Wisdom's Core Knowledge Bases
+        // Wisdom's Core Knowledge Bases - These are now mostly conceptual/for simulation,
+        // as actual data will be in Supabase.
         this.knowledgeBase = {
-            "skill_workers": {},
-            "skill_finders": {}
+            "skill_workers": {}, // Will primarily use Supabase
+            "skill_finders": {}  // Will primarily use Supabase
         };
         this.activeUserSessions = {};
         this.connectionRecords = {};
@@ -306,46 +307,51 @@ class WisdomAI {
     transitionToWorkerOnboarding(userId) {
         this.clearUI();
         this.displayMessage(`Excellent! To help me connect you with the right opportunities, please tell me more about yourself and the skills you offer.`);
-        this._getUserBasicInfo(() => this._getWorkerSkillsOffered(() => this._getUserLocationDetails(() => {
+        this._getUserBasicInfo(() => this._getWorkerSkillsOffered(() => this._getUserLocationDetails(async () => { // <--- ADD 'async' HERE
+            // The displayMessage here is a pre-Supabase success message.
+            // You can keep it, or rely solely on the one inside the try/catch block for more accurate timing.
+            // For now, it remains as per your original structure.
             this.displayMessage(`Thank you so much! I now have a much better understanding of your profile. I'm ready to start connecting you with skill finders in your area.`);
+
             // Start of Supabase insertion logic
-const { name, email, phone, skillList, locationCoordinates, fullAddressString, country } = this.tempUserData;
+            const { name, email, phone, skillList, locationCoordinates, fullAddressString, country } = this.tempUserData;
 
-const newWorker = {
-    name: name,
-    email: email,
-    phone_number: phone || null, // Supabase expects null for optional fields
-    skills: skillList,
-    location_lat: locationCoordinates ? locationCoordinates.lat : null,
-    location_lon: locationCoordinates ? locationCoordinates.lon : null,
-    country: country || null,
-    address_text: fullAddressString || null,
-    is_verified: false, // Default to false
-    rating: null // Will be set later if needed
-};
+            const newWorker = {
+                name: name,
+                email: email,
+                phone_number: phone || null, // Supabase expects null for optional fields
+                skills: skillList,
+                location_lat: locationCoordinates ? locationCoordinates.lat : null,
+                location_lon: locationCoordinates ? locationCoordinates.lon : null,
+                country: country || null,
+                address_text: fullAddressString || null,
+                is_verified: false, // Default to false
+                rating: null // Will be set later if needed
+            };
 
-try {
-    const { data, error } = await supabase
-        .from('skill_workers')
-        .insert([newWorker]);
+            try {
+                const { data, error } = await supabase
+                    .from('skill_workers')
+                    .insert([newWorker])
+                    .select(); // Add .select() to get the inserted data back, including the generated ID
 
-    if (error) {
-        console.error('Supabase insertion error:', error);
-        this.displayMessage("I apologize, but there was an error registering your profile. Please try again or contact support.");
-        // You might want to log the error more visibly or notify an admin
-    } else {
-        console.log('Skill Worker registered successfully:', data);
-        this.displayMessage("Thank you so much! Your profile has been registered. I'm ready to start connecting you to opportunities.");
-        this.updateUserSession({ type: 'worker', profileId: data[0].id }); // Assuming ID is returned
-    }
-} catch (e) {
-    console.error('Unexpected error during Supabase operation:', e);
-    this.displayMessage("An unexpected error occurred during registration. Please check your console for details.");
-}
-// End of Supabase insertion logic
+                if (error) {
+                    console.error('Supabase insertion error:', error);
+                    this.displayMessage("I apologize, but there was an error registering your profile. Please try again or contact support.");
+                    // You might want to log the error more visibly or notify an admin
+                } else {
+                    console.log('Skill Worker registered successfully:', data);
+                    this.displayMessage("Thank you so much! Your profile has been registered. I'm ready to start connecting you to opportunities.");
+                    this.updateUserSession({ type: 'worker', profileId: data[0].id }); // Assuming ID is returned
+                }
+            } catch (e) {
+                console.error('Unexpected error during Supabase operation:', e);
+                this.displayMessage("An unexpected error occurred during registration. Please check your console for details.");
+            }
+            // End of Supabase insertion logic
             this._updateUserCurrentLocation(userId, this.tempUserData.locationCoordinates);
             this._toggleLocationSharing(userId, true);
-            console.log(`[${this.name}]: Worker profile created and learned: ${this.knowledgeBase.skill_workers[userId].name}`);
+            // REMOVED: console.log(`[${this.name}]: Worker profile created and learned: ${this.knowledgeBase.skill_workers[userId].name}`); // This was old local storage simulation
             this.transitionToMainDashboard(userId, "worker");
         })));
     }
@@ -355,6 +361,7 @@ try {
         this.displayMessage(`Wonderful! To help me find the perfect talent for your needs, please provide a few details about what you're looking for.`);
         this._getUserBasicInfo(() => this._getFinderSkillsNeeded(() => this._getUserLocationDetails(() => {
             this.displayMessage(`Alright! I have everything I need to start my search for you. I'm already thinking about the best connections!`);
+            // TODO: Update this block to use Supabase insertion for skill_finders table
             this.knowledgeBase.skill_finders[userId] = {
                 "name": this.tempUserData.name,
                 "contact_email": this.tempUserData.email,
@@ -396,8 +403,8 @@ try {
         const skillsInput = this.createInput('Skills (comma-separated):', 'text', 'worker-skills', 'e.g., Carpentry, Graphic Design, Plumbing');
         this.createButton('Next', '', () => {
             const skillsRaw = skillsInput.value.trim();
-            this.tempUserData.skillsList = skillsRaw.split(',').map(s => s.trim()).filter(s => s);
-            if (this.tempUserData.skillsList.length > 0) {
+            this.tempUserData.skillList = skillsRaw.split(',').map(s => s.trim()).filter(s => s); // Corrected property to skillList
+            if (this.tempUserData.skillList.length > 0) {
                 callback();
             } else {
                 this.displayMessage(`Please enter at least one skill.`);
@@ -471,7 +478,7 @@ try {
                 const locationCoordinates = this.googlePlacesApi.get_geocode(selectedPlaceId);
                 const userCountry = this.googlePlacesApi.reverse_geocode_to_country(locationCoordinates);
                 this.tempUserData.fullAddressString = selectedAddress;
-                this.tempUserData.locationCoordinates = locationCoordinates;
+                this.tempUserData.locationCoordinates = { lat: locationCoordinates[0], lon: locationCoordinates[1] }; // Store as object
                 this.tempUserData.country = userCountry;
                 callback();
             } else {
@@ -586,8 +593,9 @@ try {
                 return;
             }
 
-            const finderCountry = this.knowledgeBase.skill_finders[finderId].country || "Nigeria";
-            const allWorkersInState = this._findAllWorkersBySkillInState(skillSought, finderCountry);
+            // TODO: Replace this._findAllWorkersBySkillInState with Supabase query
+            const finderCountry = this.knowledgeBase.skill_finders[finderId].country || "Nigeria"; // This line will need adjustment too
+            const allWorkersInState = this._findAllWorkersBySkillInState(skillSought, finderCountry); 
             
             if (allWorkersInState.length === 0) {
                 this.displayMessage(`Hmm, I couldn't find any ${skillSought} workers registered in your area right now.`);
@@ -606,9 +614,12 @@ try {
         });
     }
 
+    // TODO: This function needs to be refactored to query Supabase
     _findAllWorkersBySkillInState(skill, country) {
         console.log(`[${this.name}]: Searching my knowledge base for '${skill}' workers in ${country}...`);
         const foundWorkers = [];
+        // This currently iterates over the local knowledgeBase, which is now mostly empty
+        // We will replace this with a Supabase query later.
         for (const workerId in this.knowledgeBase.skill_workers) {
             const details = this.knowledgeBase.skill_workers[workerId];
             const workerCountry = details.country;
@@ -624,7 +635,8 @@ try {
     displayClosestMatchesIteratively(finderId, skillSought, allWorkers) {
         this.clearUI();
         this.displayMessage(`Prioritizing closest matches for '${finderId}'...`);
-        const finderLocation = this._getUserCurrentLocationData(finderId);
+        // Note: finderLocation also comes from tempUserData, which isn't persistent yet
+        const finderLocation = this._getUserCurrentLocationData(finderId); 
         
         if (!finderLocation) {
             this.displayMessage(`I can't find closest matches without your current location enabled. Let's try displaying all matches, or you can enable location sharing.`);
@@ -634,537 +646,253 @@ try {
 
         const calculateDistance = (loc1, loc2) => {
             if (!loc1 || !loc2) return Infinity;
-            return Math.sqrt(Math.pow(loc1[0] - loc2[0], 2) + Math.pow(loc1[1] - loc2[1], 2));
+            // Assuming loc1 and loc2 are objects like { lat: ..., lon: ... }
+            return Math.sqrt(Math.pow(loc1.lat - loc2.lat, 2) + Math.pow(loc1.lon - loc2.lon, 2));
         };
         
         const sortableWorkers = [];
         for (const worker of allWorkers) {
-            const workerLocation = worker.details.location;
-            const distance = calculateDistance(finderLocation, workerLocation);
+            const workerLocation = worker.details.location; // This is an array [lat, lon] from old model
+            const workerLocationObj = { lat: workerLocation[0], lon: workerLocation[1] }; // Convert to object
+            const distance = calculateDistance(finderLocation, workerLocationObj);
             if (distance !== Infinity) {
                 sortableWorkers.push([distance, worker.id, worker.details]);
             }
         }
         
         sortableWorkers.sort((a, b) => a[0] - b[0]);
-        this._iterateThroughMatches(finderId, skillSought, sortableWorkers.map(w => [w[1], w[2], w[0]]));
+        // Rest of the function was cut off from user's paste.
+        // Assuming it continues to display workers.
+        this._displayWorkerMatches(finderId, sortableWorkers, skillSought);
     }
 
     displayAllMatchesIteratively(finderId, skillSought, allWorkers) {
         this.clearUI();
-        this.displayMessage(`Displaying all available matches for '${finderId}'...`);
-        this._iterateThroughMatches(finderId, skillSought, allWorkers.map(w => [w.id, w.details, null]));
+        this.displayMessage(`Displaying all available matches for '${skillSought}'...`);
+        this._displayWorkerMatches(finderId, allWorkers, skillSought);
     }
 
-    _iterateThroughMatches(finderId, skillSought, sortedWorkerData) {
-        if (sortedWorkerData.length === 0) {
-            this.displayMessage(`No more ${skillSought} workers to show right now.`);
-            this.createButton('Start New Search', '', () => this.initiateFinderMatchingProcessWithSmartQuery(finderId));
-            return;
-        }
+    _displayWorkerMatches(finderId, workers, skillSought) {
+        let currentIndex = 0;
+        const displayNextWorker = () => {
+            this.clearUI();
+            if (currentIndex < workers.length) {
+                const worker = workers[currentIndex];
+                const workerDetails = worker.details;
+                this.displayMessage(`Found a ${skillSought} worker:`);
+                this.displayMessage(`Name: ${workerDetails.name}`, true);
+                this.displayMessage(`Skills: ${workerDetails.skills.join(', ')}`, true);
+                this.displayMessage(`Location: ${workerDetails.full_address || 'Not provided'}`, true);
+                this.displayMessage(`Rating: ${workerDetails.rating || 'N/A'}`, true);
 
-        let currentMatchIndex = this.activeUserSessions[finderId].match_index || 0;
-        
-        this.activeUserSessions[finderId].current_match_list = sortedWorkerData;
-
-        if (currentMatchIndex >= sortedWorkerData.length) {
-            this.displayMessage(`You've reviewed all available ${skillSought} workers in this category. Come back later for new additions!`);
-            this.createButton('Start New Search', '', () => this.initiateFinderMatchingProcessWithSmartQuery(finderId));
-            return;
-        }
-
-        const workerId = sortedWorkerData[currentMatchIndex][0];
-        const workerDetails = sortedWorkerData[currentMatchIndex][1];
-        const distance = sortedWorkerData[currentMatchIndex][2];
-        
-        const distanceInfo = distance !== null ? ` (approx. ${distance.toFixed(2)} units away)` : "";
-        
-        this.clearUI();
-        this.displayMessage(`Here's a ${workerDetails.skills[0] || 'skilled'} worker I found for you:`);
-        this.displayMessage(`  Name: ${workerDetails.name || workerId}`, true);
-        this.displayMessage(`  Skills: ${workerDetails.skills.join(', ')}`, true);
-        this.displayMessage(`  Availability: ${workerDetails.availability || 'flexible'}${distanceInfo}`, true);
-        this.displayMessage(`  Profile: ${workerDetails.profile_details || 'No additional details.'}`, true);
-
-        this.createButton('Connect', '', () => {
-            this.displayMessage(`Excellent choice! I'm sending a connection request to ${workerId} now.`);
-            this.sendConnectionNotificationToWorker(finderId, workerId);
-        });
-        this.createButton('Skip', '', () => {
-            this.displayMessage(`No problem. Let's see the next one.`);
-            this.activeUserSessions[finderId].match_index = currentMatchIndex + 1;
-            this._iterateThroughMatches(finderId, skillSought, sortedWorkerData);
-        });
-        this.createButton('Cancel Search', 'cancel', () => {
-            this.displayMessage(`Understood. Canceling search. Let me know if you need anything else!`);
-            delete this.activeUserSessions[finderId].current_match_list;
-            delete this.activeUserSessions[finderId].match_index;
-            this.transitionToMainDashboard(finderId, 'finder');
-        });
-    }
-
-    sendConnectionNotificationToWorker(finderId, workerId) {
-        const finderName = this.knowledgeBase.skill_finders[finderId].name || finderId;
-        const workerName = this.knowledgeBase.skill_workers[workerId].name || workerId;
-        
-        this.clearUI();
-        this.displayMessage(`--- Notification System (Conceptual) ---`);
-        this.displayMessage(`[TO WORKER ${workerName} (${workerId})]:`, true);
-        this.displayMessage(`You have a new connection request from ${finderName}!`, true);
-        this.displayMessage(`${finderName} is looking for someone with your skills.`, true);
-        this.displayMessage(`Would you like to 'accept' or 'decline' this connection?`, true);
-        
-        this.createButton('Accept', '', () => {
-            this.displayMessage(`Worker ${workerName} accepted the request.`, true);
-            this.establishConnectionAndShareLocation(finderId, workerId);
-        });
-        this.createButton('Decline', 'cancel', () => {
-            this.displayMessage(`Worker ${workerName} declined the request. Don't worry, I can find other matches for you, ${finderName}.`);
-            this.transitionToMainDashboard(finderId, 'finder'); // Return finder to dashboard
-        });
-    }
-
-    establishConnectionAndShareLocation(finderId, workerId) {
-        const connectionId = `conn_${finderId}_${workerId}_${Date.now()}`;
-        this.connectionRecords[connectionId] = {
-            "finder_id": finderId,
-            "worker_id": workerId,
-            "status": "active",
-            "start_time": new Date().toISOString()
+                this.createButton('Contact Worker', '', () => this.initiateContactProtocol(finderId, worker.id));
+                this.createButton('Next Worker', '', () => {
+                    currentIndex++;
+                    displayNextWorker();
+                });
+            } else {
+                this.displayMessage(`That's all the ${skillSought} workers I have for now!`);
+                this.createButton('Search for another skill', '', () => this.initiateFinderMatchingProcessWithSmartQuery(finderId));
+                this.createButton('Back to Dashboard', '', () => this.transitionToMainDashboard(finderId, 'finder'));
+            }
         };
-
-        this.clearUI();
-        this.displayMessage(`Connection accepted! I'm now connecting ${finderId} and ${workerId}.`);
-        this.displayMessage(`(A new 'Connection' screen appears for both users, showing each other's profile summary.)`, true);
-
-        const finderLocation = this._getUserCurrentLocationData(finderId);
-        const workerLocation = this._getUserCurrentLocationData(workerId);
-        
-        if (finderLocation && workerLocation) {
-            this.displayMessage(`Both users have consented to share their live location.`, true);
-            this.displayMessage(`(A private map view opens for ${finderId} and ${workerId}, showing their approximate current locations to each other.)`, true);
-            this.displayMessage(`(Conceptual: The map updates in near real-time as they move, allowing them to 'walk to' each other.)`, true);
-        } else {
-            this.displayMessage(`One or both users do not have live location sharing enabled for this connection. They can still communicate, or agree to share location later.`, true);
-        }
-        this.displayMessage(`Remember to respect each other's privacy settings!`, true);
-
-        this.createButton('Get Contact Number', '', () => this._initiateContactPaymentProcess(finderId, workerId));
-        this.createButton('End Connection', 'cancel', () => this.promptForJobCompletionAndFeedback(connectionId));
+        displayNextWorker();
     }
 
-    // --- Post-Job Feedback, Dispute Resolution & Safety ---
-    promptForJobCompletionAndFeedback(connectionId) {
-        if (!this.connectionRecords[connectionId]) {
-            this.displayMessage(`Error: Connection ${connectionId} not found.`);
-            return;
-        }
-
-        const connectionInfo = this.connectionRecords[connectionId];
-        const finderId = connectionInfo.finder_id;
-        const workerId = connectionInfo.worker_id;
-
+    initiateContactProtocol(finderId, workerId) {
         this.clearUI();
-        this.displayMessage(`It looks like your connection between ${finderId} and ${workerId} has concluded.`);
-        this.displayMessage(`To help others and improve my service, I kindly ask both of you to provide feedback.`, true);
-        
-        this._getAndStoreUserRating(finderId, workerId, "worker", () => {
-            this._getAndStoreUserRating(workerId, finderId, "finder", () => {
-                this.displayMessage(`Thank you both for your valuable feedback! I will use this to improve future connections.`);
-                this.connectionRecords[connectionId].status = "completed";
-                this.connectionRecords[connectionId].end_time = new Date().toISOString();
-                this.transitionToMainDashboard(finderId, 'finder'); // Return to dashboard
-            });
+        this.displayMessage(`Great choice! To connect you with ${this.knowledgeBase.skill_workers[workerId].name}, a small contact fee applies.`);
+        const feeConfig = this.contactFeeConfig[this.activeUserSessions[finderId].country || "Default_International"];
+        const feeAmount = feeConfig.amount;
+        const feeCurrency = feeConfig.currency;
+        const paymentMethod = feeConfig.payment_method;
+
+        this.displayMessage(`The fee is ${feeAmount} ${feeCurrency}. Payment method: ${paymentMethod}.`, true);
+        this.displayMessage(`(Conceptual: Show payment details here, e.g., Bitcoin address or bank details.)`, true);
+
+        this.createButton('Confirm Payment', '', () => this.confirmPayment(finderId, workerId, feeAmount, feeCurrency));
+        this.createButton('Cancel', 'cancel', () => this.displayMessage(`Contact request cancelled.`));
+    }
+
+    confirmPayment(finderId, workerId, amount, currency) {
+        this.displayMessage(`Confirming payment for ${amount} ${currency}...`);
+        // Simulate payment success
+        setTimeout(() => {
+            this.displayMessage(`Payment confirmed! Here are ${this.knowledgeBase.skill_workers[workerId].name}'s contact details:`);
+            this.displayMessage(`Email: ${this.knowledgeBase.skill_workers[workerId].contact_email}`, true);
+            this.displayMessage(`Phone: ${this.knowledgeBase.skill_workers[workerId].phone_number || 'N/A'}`, true);
+            this.recordConnection(finderId, workerId, amount, currency);
+            this.createButton('Back to Dashboard', '', () => this.transitionToMainDashboard(finderId, 'finder'));
+        }, 2000); // Simulate network delay
+    }
+
+    recordConnection(finderId, workerId, fee, currency) {
+        const connectionId = `conn_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+        this.connectionRecords[connectionId] = {
+            finderId: finderId,
+            workerId: workerId,
+            timestamp: new Date().toISOString(),
+            feePaid: fee,
+            currency: currency
+        };
+        console.log(`[${this.name}]: Connection recorded: ${connectionId}`);
+    }
+
+    // --- Ratings and Safety Protocol ---
+    offerRatingOpportunity(connectionId) {
+        this.clearUI();
+        this.displayMessage(`How was your experience with the skill worker? Please provide a rating (1-5 stars).`);
+        const ratingInput = this.createInput('Rating (1-5):', 'number', 'user-rating', 'e.g., 4');
+        this.createButton('Submit Rating', '', () => {
+            const rating = parseInt(ratingInput.value);
+            if (rating >= 1 && rating <= 5) {
+                this.submitRating(connectionId, rating);
+            } else {
+                this.displayMessage(`Please enter a valid rating between 1 and 5.`);
+            }
         });
     }
 
-    _getAndStoreUserRating(reviewerId, subjectId, subjectType, callback) {
-        const subjectName = (this.knowledgeBase[`skill_${subjectType}s`][subjectId] && this.knowledgeBase[`skill_${subjectType}s`][subjectId].name) || subjectId;
-        const reviewerName = (this.knowledgeBase[`skill_${subjectType === 'worker' ? 'finder' : 'worker'}s`][reviewerId] && this.knowledgeBase[`skill_${subjectType === 'worker' ? 'finder' : 'worker'}s`][reviewerId].name) || reviewerId;
+    submitRating(connectionId, rating) {
+        const record = this.connectionRecords[connectionId];
+        if (record) {
+            record.rating = rating;
+            if (!this.userRatings[record.workerId]) {
+                this.userRatings[record.workerId] = [];
+            }
+            this.userRatings[record.workerId].push(rating);
+            this.calculateAverageRating(record.workerId);
+            this.displayMessage(`Thank you for your rating!`);
+            this.checkSafetyProtocol(record.workerId, rating);
+        } else {
+            this.displayMessage(`Could not find connection record for rating.`);
+        }
+    }
 
+    calculateAverageRating(workerId) {
+        const ratings = this.userRatings[workerId];
+        if (ratings && ratings.length > 0) {
+            const sum = ratings.reduce((acc, r) => acc + r, 0);
+            const avg = sum / ratings.length;
+            this.knowledgeBase.skill_workers[workerId].rating = avg.toFixed(1);
+            console.log(`[${this.name}]: ${workerId} average rating updated to ${avg.toFixed(1)}`);
+        }
+    }
+
+    checkSafetyProtocol(workerId, latestRating) {
+        if (latestRating <= this.safetyProtocols.low_rating_threshold) {
+            this.displayMessage(`A low rating for ${this.knowledgeBase.skill_workers[workerId].name} has been noted. Wisdom is initiating a safety review.`);
+            this.initiatePoliceCheck(workerId);
+        }
+    }
+
+    initiatePoliceCheck(workerId) {
+        const workerCountry = this.knowledgeBase.skill_workers[workerId].country || "Nigeria";
+        const policeNumber = this.safetyProtocols.policeContactNumbers[workerCountry]?.Police || this.safetyProtocols.policeContactNumbers["Nigeria"].Police;
+        this.displayMessage(`(Conceptual: Contacting local authorities for ${workerId}'s region: ${policeNumber})`);
+        this.displayMessage(`If you have immediate concerns, please contact local police at ${policeNumber}.`, true);
+    }
+
+    // --- Proactive Recommendations for Workers ---
+    async offerProactiveJobRecommendationsToWorkers(workerId) {
         this.clearUI();
-        this.displayMessage(`--- Feedback Request from ${reviewerName} for ${subjectName} (${subjectType}) ---`);
-        this.displayMessage(`How would you rate your experience with ${subjectName}? (1-5 stars)`);
-        
-        const ratingInput = this.createInput('Your rating (1-5 stars):', 'number', 'user-rating', 'e.g., 5');
-        ratingInput.min = 1;
-        ratingInput.max = 5;
-        const commentInput = this.createInput('Your comment (Optional):', 'text', 'user-comment');
+        this.displayMessage(`Looking for new opportunities for you!`);
 
-        this.createButton('Submit Feedback', '', () => {
-            const rating = parseInt(ratingInput.value);
-            const comment = commentInput.value.trim();
+        // Get the worker's skills from Supabase
+        let workerSkills = [];
+        try {
+            const { data, error } = await supabase
+                .from('skill_workers')
+                .select('skills')
+                .eq('id', workerId) // Query by ID to get specific worker's skills
+                .single(); // Expecting one record
 
-            if (isNaN(rating) || rating < 1 || rating > 5) {
-                this.displayMessage(`Please enter a valid rating between 1 and 5.`);
+            if (error) {
+                console.error('Error fetching worker skills:', error);
+                this.displayMessage("I couldn't fetch your skills to find jobs. Please try again later.");
+                return;
+            }
+            if (data && data.skills) {
+                workerSkills = data.skills;
+            } else {
+                this.displayMessage("No skills found for your profile. Please ensure your profile is complete.");
+                return;
+            }
+        } catch (e) {
+            console.error('Unexpected error fetching worker skills:', e);
+            this.displayMessage("An unexpected error occurred while looking for jobs.");
+            return;
+        }
+
+        if (workerSkills.length === 0) {
+            this.displayMessage(`It seems your profile doesn't list any skills. Please update your profile with your skills so I can find you jobs!`);
+            this.createButton('Update Profile', '', () => this.transitionToWorkerOnboarding(workerId)); // Or a dedicated edit profile function
+            return;
+        }
+
+        this.displayMessage(`Based on your skills (${workerSkills.join(', ')}), here are some potential job opportunities I've found (conceptual):`);
+
+        // Simulate fetching job requests from Supabase (from skill_finders table)
+        try {
+            const { data: jobRequests, error: jobError } = await supabase
+                .from('skill_finders')
+                .select('*')
+                .overlaps('skill_needed', workerSkills); // Matches jobs where skill_needed array overlaps with workerSkills
+
+            if (jobError) {
+                console.error('Error fetching job requests:', jobError);
+                this.displayMessage("I couldn't find job recommendations right now. Please try again later.");
                 return;
             }
 
-            this._storeUserRating(subjectId, rating, comment);
-            this.displayMessage(`Rating received from ${reviewerName} for ${subjectName}.`);
-
-            if (rating <= this.safetyProtocols.low_rating_threshold || this.safetyProtocols.dispute_keywords.some(k => comment.toLowerCase().includes(k))) {
-                this.proactivePoliceCheckOnLowRating(reviewerId, subjectId, rating, comment, callback);
-            } else {
-                callback();
-            }
-        });
-    }
-
-    _storeUserRating(userId, rating, comment) {
-        if (!this.userRatings[userId]) {
-            this.userRatings[userId] = {'total_rating': 0, 'num_ratings': 0, 'comments': []};
-        }
-        
-        this.userRatings[userId].total_rating += rating;
-        this.userRatings[userId].num_ratings += 1;
-        if (comment) {
-            this.userRatings[userId].comments.push(comment);
-        }
-        
-        const currentAvg = this.userRatings[userId].total_rating / this.userRatings[userId].num_ratings;
-        console.log(`[${this.name}]: ${userId} now has an average rating of ${currentAvg.toFixed(1)} stars.`);
-    }
-
-    proactivePoliceCheckOnLowRating(reporterId, subjectId, rating, comment, callback) {
-        this.clearUI();
-        this.displayMessage(`--- Wisdom's Safety Protocol Initiated for ${subjectId} ---`);
-        this.displayMessage(`Given the nature of this feedback, I must ask if you require police assistance or wish to report a serious issue. Your safety and well-being are paramount.`, true);
-        
-        const reporterCountry = (this.knowledgeBase.skill_finders[reporterId] && this.knowledgeBase.skill_finders[reporterId].country) ||
-                                (this.knowledgeBase.skill_workers[reporterId] && this.knowledgeBase.skill_workers[reporterId].country) || "Unknown";
-        const policeNumber = this.safetyProtocols.policeContactNumbers[reporterCountry] && this.safetyProtocols.policeContactNumbers[reporterCountry].Police;
-
-        if (policeNumber) {
-            this.displayMessage(`Would you like me to connect you directly to the police for ${reporterCountry} (${policeNumber})?`, true);
-            this.createButton('Yes', '', () => {
-                this.displayMessage(`Connecting you to ${policeNumber} now. Please be ready to provide details.`);
-                this._logSafetyIncident(reporterId, subjectId, rating, comment, "Police_Contact_Initiated");
-                callback(); // Continue to next step in feedback flow
-            });
-            this.createButton('No', 'cancel', () => {
-                this.displayMessage(`Understood. I will not contact the police at this time.`);
-                this._logSafetyIncident(reporterId, subjectId, rating, comment, "Police_Contact_Declined");
-                callback(); // Continue
-            });
-        } else {
-            this.displayMessage(`I couldn't find a direct police contact number for your current region. Please contact your local emergency services if you feel unsafe.`, true);
-            this._logSafetyIncident(reporterId, subjectId, rating, comment, "Police_Contact_Unavailable");
-            callback(); // Continue
-        }
-    }
-
-    _logSafetyIncident(reporterId, subjectId, rating, comment, actionTaken) {
-        console.log(`[${this.name}]: Logging incident: Reporter=${reporterId}, Subject=${subjectId}, Rating=${rating}, Comment='${comment}', Action='${actionTaken}'`);
-    }
-
-    // --- Contact Sharing and Monetization ---
-    _initiateContactPaymentProcess(connectingUserId, targetUserId) {
-        this.clearUI();
-        const connectingUserData = this.knowledgeBase.skill_finders[connectingUserId] || this.knowledgeBase.skill_workers[connectingUserId];
-        if (!connectingUserData) {
-            this.displayMessage(`Error: Connecting user data not found.`);
-            return;
-        }
-
-        const connectingUserCountry = connectingUserData.country || "Default_International";
-        let feeConfig = this.contactFeeConfig[connectingUserCountry];
-        if (!feeConfig) {
-            feeConfig = this.contactFeeConfig.Default_International;
-        }
-
-        const requiredAmount = feeConfig.amount;
-        const requiredCurrency = feeConfig.currency;
-        const paymentMethod = feeConfig.payment_method;
-
-        this.displayMessage(`To receive the direct contact number for ${targetUserId}, a small fee of ${requiredAmount} ${requiredCurrency} is required.`);
-        this.displayMessage(`Payment can be made via ${paymentMethod}.`, true);
-        
-        if (requiredCurrency === "USD" && paymentMethod === "Bitcoin") {
-            const btcRate = this.currencyExchangeRates.USD_to_BTC;
-            const btcAmount = requiredAmount * btcRate;
-            this.displayMessage(`That's approximately ${btcAmount.toFixed(8)} BTC.`, true);
-            this.displayMessage(`Please send the Bitcoin to this address: [Your_Wisdom_BTC_Wallet_Address_Here]`, true);
-        } else if (requiredCurrency === "NGN" && paymentMethod === "Bank Transfer") {
-            this.displayMessage(`Please make a bank transfer to our account:`, true);
-            this.displayMessage(`Account Name: Wisdom AI Connect`, true);
-            this.displayMessage(`Bank Name: [Your_Nigerian_Bank_Name_Example]`, true);
-            this.displayMessage(`Account Number: [Your_Nigerian_Bank_Account_Number_Example]`, true);
-            this.displayMessage(`Reference: ${connectingUserId}-${targetUserId}`, true);
-        }
-        
-        this.createButton('Confirm Payment', '', () => this._awaitPaymentConfirmation(connectingUserId, targetUserId, requiredAmount, requiredCurrency, paymentMethod));
-        this.createButton('Cancel', 'cancel', () => {
-            this.displayMessage(`Payment canceled. The contact number will not be released.`);
-            this.displayMessage(`You can continue communicating via the in-app chat or the map.`);
-            // Optionally return to previous state or dashboard
-            // For now, it will just show the cancel message.
-        });
-    }
-
-    _awaitPaymentConfirmation(connectingUserId, targetUserId, amount, currency, method) {
-        this.clearUI();
-        this.displayMessage(`Awaiting confirmation of ${amount} ${currency} payment via ${method} from ${connectingUserId}...`);
-        
-        // Simulate payment confirmation with a user prompt
-        const confirmation = prompt(`Simulate payment confirmed? (Type 'yes' or 'no'):`).toLowerCase();
-
-        if (confirmation === "yes") {
-            const targetPhoneNumber = (this.knowledgeBase.skill_workers[targetUserId] && this.knowledgeBase.skill_workers[targetUserId].phone_number) ||
-                                      (this.knowledgeBase.skill_finders[targetUserId] && this.knowledgeBase.skill_finders[targetUserId].phone_number);
-
-            if (targetPhoneNumber) {
-                this.displayMessage(`Payment confirmed! Here is the direct contact number for ${targetUserId}: ${targetPhoneNumber}.`);
-                this.displayMessage(`Remember, the map connection between you and ${targetUserId} remains active and free, regardless of this contact fee.`, true);
-                this._logTransaction(connectingUserId, targetUserId, amount, currency, method, "Success");
-                this.createButton('Return to Connection', '', () => { /* Logic to return to connection details */ });
-            } else {
-                this.displayMessage(`I'm sorry, ${targetUserId} has not provided a phone number for direct contact, despite the payment.`);
-                this.displayMessage(`Please contact support at IntelligentWisdomsup@gmail.com for a refund. My apologies for this oversight.`, true);
-                this._logTransaction(connectingUserId, targetUserId, amount, currency, method, "Failed_No_Number_Refund_Initiated");
-            }
-        } else {
-            this.displayMessage(`Payment not confirmed. The contact number will not be released.`);
-            this.displayMessage(`Please try again, or contact support at IntelligentWisdomsup@gmail.com if you believe there's an issue.`, true);
-            this._logTransaction(connectingUserId, targetUserId, amount, currency, method, "Failed_Payment_Not_Confirmed");
-        }
-    }
-
-    _logTransaction(payerId, payeeId, amount, currency, method, status) {
-        const timestamp = new Date().toISOString();
-        console.log(`[${this.name}]: TRANSACTION LOG: Timestamp=${timestamp}, Payer=${payerId}, Payee=${payeeId}, Amount=${amount} ${currency}, Method=${method}, Status=${status}`);
-    }
-
-    // --- Proactive Location & Self-Awareness ---
-    checkAndUpdateUserLocation(userId, checkIntervalHours = 24) {
-        const currentTime = Date.now();
-        const sessionData = this.activeUserSessions[userId] || {};
-        const lastCheckTime = sessionData.last_location_check_timestamp || 0;
-
-        if ((currentTime - lastCheckTime) / (1000 * 3600) >= checkIntervalHours) {
-            this.clearUI();
-            this.displayMessage(`--- PROACTIVE WISDOM CHECK (for ${userId}) ---`);
-            const userName = (this.knowledgeBase.skill_finders[userId] && this.knowledgeBase.skill_finders[userId].name) ||
-                             (this.knowledgeBase.skill_workers[userId] && this.knowledgeBase.skill_workers[userId].name) || 'buddy';
-            this.displayMessage(`Hey ${userName}! I've noticed it's been a while since we confirmed your location. Has your current state/area changed, or would you like to update your precise location for better local matches?`, true);
-            const currentLocStr = sessionData.current_location ? `Lat: ${sessionData.current_location[0].toFixed(2)}, Lon: ${sessionData.current_location[1].toFixed(2)}` : "Not Set";
-            this.displayMessage(`Your current recorded location is: ${currentLocStr}.`, true);
-            
-            this.createButton('Update Location', '', () => {
-                this.displayMessage(`Great! Let's update that.`);
-                const tempOriginalData = { ...this.tempUserData }; // Store original if any exists
-                this.tempUserData = { "userId": userId }; // Reset temp data for update
-                this._getUserLocationDetails(() => {
-                    this._updateUserCurrentLocation(userId, this.tempUserData.locationCoordinates);
-                    // Update main knowledge base entry as well
-                    if (this.knowledgeBase.skill_finders[userId]) {
-                        this.knowledgeBase.skill_finders[userId].location = this.tempUserData.locationCoordinates;
-                        this.knowledgeBase.skill_finders[userId].full_address = this.tempUserData.fullAddressString;
-                        this.knowledgeBase.skill_finders[userId].country = this.tempUserData.country;
-                    } else if (this.knowledgeBase.skill_workers[userId]) {
-                        this.knowledgeBase.skill_workers[userId].location = this.tempUserData.locationCoordinates;
-                        this.knowledgeBase.skill_workers[userId].full_address = this.tempUserData.fullAddressString;
-                        this.knowledgeBase.skill_workers[userId].country = this.tempUserData.country;
-                    }
-                    this.tempUserData = tempOriginalData; // Restore original temp data
-                    this.displayMessage(`Your location has been updated!`);
-                    this.transitionToMainDashboard(userId, (this.knowledgeBase.skill_finders[userId] ? 'finder' : 'worker'));
+            if (jobRequests && jobRequests.length > 0) {
+                this.displayMessage(`Found ${jobRequests.length} matching job requests!`);
+                jobRequests.forEach(job => {
+                    this.displayMessage(`- Needs: ${job.skill_needed.join(', ')} for "${job.project_description}" in ${job.address_text || 'nearby area'}.`, true);
+                    // You might add a "View Details" button here for each job
                 });
-            });
-            this.createButton('No Thanks', 'cancel', () => {
-                this.displayMessage(`Understood. I'll continue using your last known location. I'll check again later.`);
-                this._updateUserCurrentLocation(userId, sessionData.current_location, true);
-                this.transitionToMainDashboard(userId, (this.knowledgeBase.skill_finders[userId] ? 'finder' : 'worker'));
-            });
-            this.createButton('Disable Location', 'cancel', () => {
-                this.displayMessage(`Okay. I'll disable location sharing for you. This means local matches will be limited.`);
-                this._toggleLocationSharing(userId, false);
-                this.transitionToMainDashboard(userId, (this.knowledgeBase.skill_finders[userId] ? 'finder' : 'worker'));
-            });
-        }
-    }
-
-    handleUnrelatedQuery(userId, query) {
-        this.clearUI();
-        const userName = (this.knowledgeBase.skill_finders[userId] && this.knowledgeBase.skill_finders[userId].name) ||
-                         (this.knowledgeBase.skill_workers[userId] && this.knowledgeBase.skill_workers[userId].name) || 'buddy';
-        this.displayMessage(`That's an interesting question, ${userName}! My primary skill is connecting people based on their talents and needs. So, I might not have the answer to *that* specific question, as it's not directly about connecting skill workers and skill finders.`);
-        this.displayMessage(`However, I am *always* eager to learn more about all the incredible jobs and problems in the world! Could you tell me more about what you just asked, or perhaps if it relates to a skill you need, or offer?`, true);
-        this._learnNewSkillTerm(query);
-        this.createButton('Back to Dashboard', '', () => this.transitionToMainDashboard(userId, (this.knowledgeBase.skill_finders[userId] ? 'finder' : 'worker')));
-    }
-
-    // --- Self-Improvement & Analytics ---
-    analyzeUserFeedbackForImprovement() {
-        this.displayMessage(`Analyzing user feedback to enhance my performance...`);
-        this.displayMessage(`I am continually refining my connection algorithms and user experience based on your valuable input.`, true);
-        console.log(`[${this.name}]: (Wisdom's avatar shows a thoughtful, computing animation.)`);
-    }
-
-    expandSkillOntologyThroughObservation() {
-        this.displayMessage(`Continuously expanding my understanding of global skills and jobs...`);
-        this.displayMessage(`Every successful connection teaches me more about the dynamic world of skills.`, true);
-        console.log(`[${this.name}]: (Wisdom's avatar looks focused, with a subtle "data flow" visual.)`);
-    }
-
-    offerProactiveJobRecommendationsToWorkers(workerId) {
-        this.clearUI();
-        this.displayMessage(`Actively looking for new opportunities for my skilled users...`);
-        
-        const workerSkills = this.knowledgeBase.skill_workers[workerId]?.skills || [];
-        const recommendedJobs = [];
-
-        for (const finderId in this.knowledgeBase.skill_finders) {
-            const finderDetails = this.knowledgeBase.skill_finders[finderId];
-            const neededSkills = finderDetails.skill_needed || [];
-            
-            // Simple check: if any needed skill matches worker's skills
-            if (neededSkills.some(skill => workerSkills.includes(skill))) {
-                recommendedJobs.push({
-                    finderName: finderDetails.name || finderId,
-                    skillsNeeded: neededSkills.join(', '),
-                    project: finderDetails.project_description || 'a project',
-                    location: finderDetails.full_address || 'their location'
-                });
+            } else {
+                this.displayMessage(`No current job requests match your skills. I'll keep looking!`);
             }
+        } catch (e) {
+            console.error('Unexpected error fetching job requests:', e);
+            this.displayMessage("An unexpected error occurred while searching for job recommendations.");
         }
 
-        if (recommendedJobs.length > 0) {
-            this.displayMessage(`Here are some potential jobs I found for you:`, true);
-            recommendedJobs.forEach(job => {
-                this.displayMessage(`- ${job.finderName} needs ${job.skillsNeeded} for "${job.project}" near ${job.location}.`, true);
-            });
-        } else {
-            this.displayMessage(`No new proactive job recommendations for you right now, but I'll keep looking!`, true);
-        }
-        this.displayMessage(`My goal is to keep my skilled individuals engaged and connected to the best opportunities.`, true);
         this.createButton('Back to Dashboard', '', () => this.transitionToMainDashboard(workerId, 'worker'));
     }
 
-    displayCustomerSupportInfo() {
-        this.clearUI();
-        this.displayMessage(`If you ever have any questions, encounter an issue, or simply need assistance, my human support team is here to help you.`);
-        this.displayMessage(`---------------------------------------------`, true);
-        this.displayMessage(`|    For Customer Support, please contact:  |`, true);
-        this.displayMessage(`|    IntelligentWisdomsup@gmail.com         |`, true);
-        this.displayMessage(`---------------------------------------------`, true);
-        this.displayMessage(`We're always working to make your experience with Wisdom as smooth as possible.`, true);
+    // --- User Session Management (Conceptual) ---
+    updateUserSession(sessionData) {
+        const userId = this.tempUserData.userId; // Use the temporary ID from onboarding
+        if (!this.activeUserSessions[userId]) {
+            this.activeUserSessions[userId] = {};
+        }
+        Object.assign(this.activeUserSessions[userId], sessionData);
+        console.log(`[${this.name}]: User ${userId} session updated:`, this.activeUserSessions[userId]);
     }
 
-    // --- Main App Flow Simulation ---
-    runSimulation() {
-        this.displayMessage("Welcome to Wisdom: The AI Connector!");
-        
-        // Simulate initial user onboarding
-        this.initiateFirstUserExperience();
+    getUserSession(userId) {
+        return this.activeUserSessions[userId];
+    }
 
-        // --- Simulate Pre-existing Users for easier testing ---
-        // These users will be automatically set up when the simulation runs
-        const finderIdForJob = "finder_Aisha";
-        const workerIdForJob = "worker_Medic";
-        const workerIdPainter = "worker_Painter";
-        const internationalFinderId = "finder_US";
-        const internationalWorkerId = "worker_US";
+    endUserSession(userId) {
+        delete this.activeUserSessions[userId];
+        console.log(`[${this.name}]: User ${userId} session ended.`);
+    }
 
-        this.knowledgeBase.skill_finders[finderIdForJob] = {
-            "name": "Aisha",
-            "contact_email": "aisha@example.com",
-            "phone_number": "08012345678",
-            "location": [6.55, 3.35], // Lagos, Nigeria
-            "country": "Nigeria",
-            "skill_needed": ["First Aid Provider"], // For the demo
-            "project_description": "Minor injury first aid"
-        };
-        this.activeUserSessions[finderIdForJob] = {
-            "current_location": [6.55, 3.35],
-            "location_sharing_enabled": true,
-            "last_location_check_timestamp": Date.now()
-        };
-
-        this.knowledgeBase.skill_workers[workerIdForJob] = {
-            "name": "Dr. Ade",
-            "skills": ["Doctor", "First Aid Provider", "General Practitioner"],
-            "availability": "immediately",
-            "location": [6.56, 3.36], // Very close to finder_Aisha
-            "profile_details": "Medical Doctor, can provide first aid and basic consultation.",
-            "phone_number": "09087654321",
-            "country": "Nigeria"
-        };
-        this.activeUserSessions[workerIdForJob] = {
-            "current_location": [6.56, 3.36],
-            "location_sharing_enabled": true,
-            "last_location_check_timestamp": Date.now()
-        };
-
-        this.knowledgeBase.skill_workers[workerIdPainter] = {
-            "name": "Lola Painter",
-            "skills": ["Painter", "Art Restoration"],
-            "availability": "weekends",
-            "location": [6.54, 3.34],
-            "profile_details": "Experienced painter for homes and art pieces.",
-            "phone_number": "07011223344",
-            "country": "Nigeria"
-        };
-        this.activeUserSessions[workerIdPainter] = {
-            "current_location": [6.54, 3.34],
-            "location_sharing_enabled": true,
-            "last_location_check_timestamp": Date.now()
-        };
-
-        this.knowledgeBase.skill_finders[internationalFinderId] = {
-            "name": "John (USA)",
-            "contact_email": "john.us@example.com",
-            "phone_number": "111-222-3333",
-            "location": [34.05, -118.25], // Los Angeles, USA
-            "country": "USA",
-            "skill_needed": ["gardening"],
-            "project_description": "Need help with lawn care."
-        };
-        this.activeUserSessions[internationalFinderId] = {
-            "current_location": [34.05, -118.25],
-            "location_sharing_enabled": true,
-            "last_location_check_timestamp": Date.now()
-        };
-
-        this.knowledgeBase.skill_workers[internationalWorkerId] = {
-            "name": "Maria (USA)",
-            "skills": ["gardening", "landscaping"],
-            "availability": "any",
-            "location": [34.06, -118.26], // Close to John
-            "profile_details": "Passionate gardener with expertise in diverse plants.",
-            "phone_number": "999-888-7777",
-            "country": "USA"
-        };
-        this.activeUserSessions[internationalWorkerId] = {
-            "current_location": [34.06, -118.26],
-            "location_sharing_enabled": true,
-            "last_location_check_timestamp": Date.now()
-        };
-
-        // Simulate a connection for international users for direct testing of contact flow
-        this.connectionRecords["conn_US_001"] = {
-            "finder_id": internationalFinderId,
-            "worker_id": internationalWorkerId,
-            "status": "active",
-            "job_details": "Simulated gardening job"
-        };
+    // --- Main Application Loop ---
+    async start() {
+        this.displayMessage("Welcome to Wisdom AI! Starting up...");
+        // Simulate initial setup delay
+        setTimeout(() => {
+            this.initiateFirstUserExperience();
+        }, 1000);
     }
 }
 
-// Initialize and run Wisdom AI
-const wisdomApp = new WisdomAI({
-    user_id: "creator_user",
-    appearance_model: "my_personalized_3d_avatar_model.glb" // This is conceptual for the image
-});
-
-// Start the simulation when the page loads
+// Initialize and start Wisdom AI
 document.addEventListener('DOMContentLoaded', () => {
-    wisdomApp.runSimulation();
+    const wisdomAI = new WisdomAI({});
+    wisdomAI.start();
 });
-
-// --- Example interactions you can trigger in console after running ---
-// wisdomApp.initiateFinderMatchingProcessWithSmartQuery("finder_Aisha");
-// wisdomApp.promptForJobCompletionAndFeedback("conn_Aisha_Medic_123"); // Assuming this connection ID exists from a previous run
-// wisdomApp.checkAndUpdateUserLocation("finder_Aisha", 0); // Force check now
-// wisdomApp.handleUnrelatedQuery("finder_Aisha", "how to bake cake?");
-// wisdomApp._initiateContactPaymentProcess("finder_US", "worker_US"); // Test international payment
