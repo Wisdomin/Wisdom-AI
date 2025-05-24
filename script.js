@@ -308,17 +308,41 @@ class WisdomAI {
         this.displayMessage(`Excellent! To help me connect you with the right opportunities, please tell me more about yourself and the skills you offer.`);
         this._getUserBasicInfo(() => this._getWorkerSkillsOffered(() => this._getUserLocationDetails(() => {
             this.displayMessage(`Thank you so much! I now have a much better understanding of your profile. I'm ready to start connecting you with skill finders in your area.`);
-            this.knowledgeBase.skill_workers[userId] = {
-                "name": this.tempUserData.name,
-                "contact_email": this.tempUserData.email,
-                "phone_number": this.tempUserData.phone,
-                "skills": this.tempUserData.skillsList,
-                "location": this.tempUserData.locationCoordinates,
-                "full_address": this.tempUserData.fullAddressString,
-                "country": this.tempUserData.country,
-                "availability": "flexible",
-                "profile_details": ""
-            };
+            // Start of Supabase insertion logic
+const { name, email, phone, skillList, locationCoordinates, fullAddressString, country } = this.tempUserData;
+
+const newWorker = {
+    name: name,
+    email: email,
+    phone_number: phone || null, // Supabase expects null for optional fields
+    skills: skillList,
+    location_lat: locationCoordinates ? locationCoordinates.lat : null,
+    location_lon: locationCoordinates ? locationCoordinates.lon : null,
+    country: country || null,
+    address_text: fullAddressString || null,
+    is_verified: false, // Default to false
+    rating: null // Will be set later if needed
+};
+
+try {
+    const { data, error } = await supabase
+        .from('skill_workers')
+        .insert([newWorker]);
+
+    if (error) {
+        console.error('Supabase insertion error:', error);
+        this.displayMessage("I apologize, but there was an error registering your profile. Please try again or contact support.");
+        // You might want to log the error more visibly or notify an admin
+    } else {
+        console.log('Skill Worker registered successfully:', data);
+        this.displayMessage("Thank you so much! Your profile has been registered. I'm ready to start connecting you to opportunities.");
+        this.updateUserSession({ type: 'worker', profileId: data[0].id }); // Assuming ID is returned
+    }
+} catch (e) {
+    console.error('Unexpected error during Supabase operation:', e);
+    this.displayMessage("An unexpected error occurred during registration. Please check your console for details.");
+}
+// End of Supabase insertion logic
             this._updateUserCurrentLocation(userId, this.tempUserData.locationCoordinates);
             this._toggleLocationSharing(userId, true);
             console.log(`[${this.name}]: Worker profile created and learned: ${this.knowledgeBase.skill_workers[userId].name}`);
